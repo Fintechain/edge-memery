@@ -1,0 +1,87 @@
+[build-system]
+requires = ["setuptools>=77", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "memery-mcp"
+dynamic = ["version"]
+description = "A local-first, continuously curated memory layer for AI agents."
+readme = "README.md"
+requires-python = ">=3.10"
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
+authors = [
+  {name = "Memery contributors"}
+]
+keywords = [
+  "ai",
+  "memory",
+  "mcp",
+  "local-first",
+  "knowledge-graph",
+  "vector-search"
+]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Environment :: Console",
+  "Intended Audience :: Developers",
+  "Operating System :: OS Independent",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Topic :: Scientific/Engineering :: Artificial Intelligence",
+  "Topic :: Software Development :: Libraries :: Python Modules"
+]
+dependencies = [
+  "mcp>=1.0.0",
+  "lancedb>=0.4.0",
+  "numpy>=1.21.0",
+  "pyarrow>=10.0.0",
+  "scikit-learn>=1.0.0",
+  "networkx>=3.0"
+]
+
+[project.urls]
+Homepage = "https://github.com/Fintechain/edge-memery"
+Repository = "https://github.com/Fintechain/edge-memery"
+Issues = "https://github.com/Fintechain/edge-memery/issues"
+Changelog = "https://github.com/Fintechain/edge-memery/blob/main/CHANGELOG.md"
+
+[project.optional-dependencies]
+graph = [
+  "graphifyy>=0.1.14"
+]
+palace = [
+  "mempalace>=3.4.0,<4"
+]
+all = [
+  "graphifyy>=0.1.14",
+  "mempalace>=3.4.0,<4"
+]
+dev = [
+  "build>=1.2.0",
+  "pytest>=8.0.0",
+  "twine>=5.0.0"
+]
+
+[project.scripts]
+memery = "memory_server.server:main"
+
+[tool.setuptools]
+package-dir = {memory_server = "."}
+packages = [
+  "memory_server",
+  "memory_server.backends",
+  "memory_server.palace",
+  "memory_server.pipeline"
+]
+include-package-data = true
+
+[tool.setuptools.dynamic]
+version = {attr = "memory_server.__version__"}
+
+[tool.pytest.ini_options]
+testpaths = ["."]
+python_files = ["test_*.py"]
+addopts = "-q"

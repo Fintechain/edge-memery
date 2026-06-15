@@ -1,0 +1,48 @@
+# Python bytecode and caches
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Packaging output
+build/
+dist/
+*.egg-info/
+*.egg
+
+# Local runtime data
+memory.db
+memory.db-shm
+memory.db-wal
+*.sqlite3
+lancedb_data/
+memery_data/
+cache/
+
+# Local configuration and secrets
+.env
+.env.*
+!.env.example
+*.local.json
+
+# Editors and operating systems
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Benchmark artifacts
+benchmark-results/
+*.prof
+*.trace

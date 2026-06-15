@@ -1,0 +1,24 @@
+name: Feature request
+description: Propose an improvement to Memery.
+title: "[Feature]: "
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What user or system problem should this solve?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: Describe the API, behavior, and alternatives considered.
+    validations:
+      required: true
+  - type: textarea
+    id: implications
+    attributes:
+      label: Compatibility and performance implications
+      description: Note schema, privacy, migration, dependency, or benchmark effects.
