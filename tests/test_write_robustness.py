@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sqlite3
 
 from memory_server.db import MemoryDB
@@ -61,6 +62,62 @@ def test_old_database_schema_is_migrated_before_write(tmp_path):
     db.close()
 
 
+def test_memorydb_write_memory_falls_back_from_unknown_hall(tmp_path):
+    db = MemoryDB(str(tmp_path / "memory.db"))
+    project = db.create_project("db-hall-fallback")
+
+    row = db.write_memory(
+        project_id=project["id"],
+        memory_type="fact",
+        title="Fallback hall",
+        content="The database layer should normalize unknown halls.",
+        hall_id="missing-hall",
+    )
+
+    assert row["hall_id"] == "general"
+    assert db.get_stats(project["id"])["total_memories"] == 1
+    db.close()
+
+
+def test_memorydb_write_memory_normalizes_blank_fields(tmp_path):
+    db = MemoryDB(str(tmp_path / "memory.db"))
+    project = db.create_project("db-normalize")
+
+    row = db.write_memory(
+        project_id=project["id"],
+        memory_type=None,
+        title=None,
+        content="  normalized content  ",
+        tags="alpha",
+        source_files=("beta",),
+    )
+
+    assert row["memory_type"] == "fact"
+    assert row["title"] == "normalized content"
+    assert row["content"] == "normalized content"
+    assert json.loads(row["tags"]) == ["alpha"]
+    assert json.loads(row["source_files"]) == ["beta"]
+    db.close()
+
+
+def test_memorydb_write_memory_rejects_empty_content(tmp_path):
+    db = MemoryDB(str(tmp_path / "memory.db"))
+    project = db.create_project("db-empty-content")
+
+    try:
+        db.write_memory(
+            project_id=project["id"],
+            memory_type="fact",
+            title="Empty content",
+            content=None,
+        )
+    except ValueError as exc:
+        assert "content cannot be empty" in str(exc)
+    else:
+        raise AssertionError("Expected ValueError for empty content")
+    db.close()
+
+
 def test_server_write_memory_survives_bad_tags_and_vector_failure(tmp_path, monkeypatch):
     import memory_server.server as server
 
@@ -84,6 +141,51 @@ def test_server_write_memory_survives_bad_tags_and_vector_failure(tmp_path, monk
     assert result["memory"]["content"] == "This should be saved even when vector indexing fails."
     assert result["warnings"]
     assert db.get_stats(project["id"])["total_memories"] == 1
+    db.close()
+
+
+def test_server_write_memory_normalizes_blank_fields(tmp_path, monkeypatch):
+    import memory_server.server as server
+
+    db = MemoryDB(str(tmp_path / "memory.db"))
+    project = db.create_project("server-normalize")
+    monkeypatch.setattr(server, "db", db)
+    monkeypatch.setattr(server.curator, "db", db)
+
+    result = server.write_memory(
+        project_name="server-normalize",
+        memory_type=None,
+        title=None,
+        content="  server normalized content  ",
+        refresh_summary=False,
+    )
+
+    assert result["status"] == "written"
+    assert result["memory"]["memory_type"] == "fact"
+    assert result["memory"]["title"] == "server normalized content"
+    assert result["memory"]["content"] == "server normalized content"
+    assert db.get_stats(project["id"])["total_memories"] == 1
+    db.close()
+
+
+def test_server_write_memory_rejects_empty_content(tmp_path, monkeypatch):
+    import memory_server.server as server
+
+    db = MemoryDB(str(tmp_path / "memory.db"))
+    db.create_project("server-empty-content")
+    monkeypatch.setattr(server, "db", db)
+    monkeypatch.setattr(server.curator, "db", db)
+
+    result = server.write_memory(
+        project_name="server-empty-content",
+        memory_type="fact",
+        title="Empty",
+        content=None,
+        refresh_summary=False,
+    )
+
+    assert result == {"error": "content cannot be empty."}
+    assert db.get_stats()["total_memories"] == 0
     db.close()
 
 

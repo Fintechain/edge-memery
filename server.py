@@ -103,6 +103,21 @@ def _parse_string_list(value, field_name: str) -> tuple[list[str], str | None]:
     return [str(parsed)], f"{field_name} JSON value was not an array; coerced."
 
 
+def _clean_text(value, default: str = "") -> str:
+    if value is None:
+        return default
+    text = str(value).strip()
+    return text if text else default
+
+
+def _normalize_memory_type(memory_type) -> str:
+    return _clean_text(memory_type, "fact")
+
+
+def _normalize_content(content) -> str:
+    return _clean_text(content)
+
+
 def _warning(exc: Exception) -> str:
     return f"{type(exc).__name__}: {exc}"
 
@@ -231,6 +246,7 @@ def write_memory(
     refresh_summary: bool = True,
 ) -> dict:
     """Write a memory directly."""
+    memory_type = _normalize_memory_type(memory_type)
     if memory_type in TOP_LEVEL_MEMORY_TYPES:
         return {
             "error": (
@@ -254,7 +270,7 @@ def write_memory(
                 if room:
                     room_id = room["id"]
 
-    content = str(content).strip()
+    content = _normalize_content(content)
     if not content:
         return {"error": "content cannot be empty."}
 
@@ -266,15 +282,18 @@ def write_memory(
         warnings.append(f"Unknown hall_id '{hall_id}'; using 'general'.")
         hall_id = "general"
 
-    memory = db.write_memory(
-        project_id=project_id, memory_type=memory_type,
-        title=title or content[:60], content=content,
-        wing_id=wing_id, room_id=room_id, hall_id=hall_id,
-        confidence_label=Confidence.INFERRED, confidence_score=confidence,
-        tags=tags_list, source_files=files_list,
-        importance=importance, confidence=confidence,
-        novelty=novelty, reusability=reusability, actionability=actionability,
-    )
+    try:
+        memory = db.write_memory(
+            project_id=project_id, memory_type=memory_type,
+            title=title, content=content,
+            wing_id=wing_id, room_id=room_id, hall_id=hall_id,
+            confidence_label=Confidence.INFERRED, confidence_score=confidence,
+            tags=tags_list, source_files=files_list,
+            importance=importance, confidence=confidence,
+            novelty=novelty, reusability=reusability, actionability=actionability,
+        )
+    except ValueError as exc:
+        return {"error": str(exc)}
     try:
         vector_store.insert(memory["id"], project_id, content)
     except Exception as exc:
@@ -318,10 +337,10 @@ def write_memories_batch(project_name: str, memories: str) -> dict:
     for index, item in enumerate(items):
         if not isinstance(item, dict):
             return {"error": f"Memory at index {index} must be an object."}
-        memory_type = item.get("memory_type", "fact")
+        memory_type = _normalize_memory_type(item.get("memory_type", "fact"))
         if memory_type in TOP_LEVEL_MEMORY_TYPES:
             return {"error": f"Memory at index {index} uses protected type '{memory_type}'."}
-        content = str(item.get("content", "")).strip()
+        content = _normalize_content(item.get("content"))
         if not content:
             return {"error": f"Memory at index {index} has empty content."}
         hall_id = str(item.get("hall_id", "general") or "general")
@@ -341,7 +360,7 @@ def write_memories_batch(project_name: str, memories: str) -> dict:
             **item,
             "project_id": project["id"],
             "memory_type": memory_type,
-            "title": str(item.get("title") or curator._extract_title(content)),
+            "title": _clean_text(item.get("title")) or curator._extract_title(content),
             "content": content,
             "hall_id": hall_id,
             "tags": tags_list,
@@ -349,7 +368,10 @@ def write_memories_batch(project_name: str, memories: str) -> dict:
         }
         rows.append(row)
 
-    written = db.write_memories_batch(rows)
+    try:
+        written = db.write_memories_batch(rows)
+    except ValueError as exc:
+        return {"error": str(exc)}
     for memory in written:
         vector_items.append({
             "id": memory["id"],

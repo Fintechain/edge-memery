@@ -669,6 +669,53 @@ class MemoryDB:
         row = self.conn.execute("SELECT * FROM halls WHERE id=?", (hid,)).fetchone()
         return dict(row) if row else None
 
+    def _normalize_hall_id(self, hall_id: str | None) -> str:
+        if not hall_id:
+            return "general"
+        hall_id = str(hall_id).strip() or "general"
+        return hall_id if self.get_hall(hall_id) else "general"
+
+    @staticmethod
+    def _clean_text(value: Any, default: str = "") -> str:
+        if value is None:
+            return default
+        text = str(value).strip()
+        return text if text else default
+
+    @classmethod
+    def _normalize_memory_type(cls, memory_type: Any) -> str:
+        return cls._clean_text(memory_type, "fact")
+
+    @classmethod
+    def _normalize_memory_content(cls, content: Any) -> str:
+        content_text = cls._clean_text(content)
+        if not content_text:
+            raise ValueError("content cannot be empty.")
+        return content_text
+
+    @classmethod
+    def _normalize_memory_title(cls, title: Any, content: str) -> str:
+        return cls._clean_text(title) or content[:60] or "Untitled"
+
+    @staticmethod
+    def _normalize_string_list(value: Any) -> list[str]:
+        if value is None:
+            return []
+        if isinstance(value, (list, tuple, set)):
+            values = value
+        else:
+            values = [value]
+        return [str(item).strip() for item in values if item is not None and str(item).strip()]
+
+    @staticmethod
+    def _normalize_float(value: Any, default: float = 0.0) -> float:
+        if value is None or value == "":
+            return default
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return default
+
     # ═══════════════════════════════════════════════════════════════════════
     # Projects
     # ═══════════════════════════════════════════════════════════════════════
@@ -743,6 +790,19 @@ class MemoryDB:
     ) -> dict:
         mid = _uid()
         now = _now()
+        memory_type = self._normalize_memory_type(memory_type)
+        content = self._normalize_memory_content(content)
+        title = self._normalize_memory_title(title, content)
+        hall_id = self._normalize_hall_id(hall_id)
+        confidence_label = self._clean_text(confidence_label, Confidence.INFERRED)
+        confidence_score = self._normalize_float(confidence_score, 0.5)
+        tags = self._normalize_string_list(tags)
+        source_files = self._normalize_string_list(source_files)
+        importance = self._normalize_float(importance)
+        confidence = self._normalize_float(confidence)
+        novelty = self._normalize_float(novelty)
+        reusability = self._normalize_float(reusability)
+        actionability = self._normalize_float(actionability)
         score = self._calc_score(importance, confidence, novelty, reusability, actionability)
         self.conn.execute(
             """INSERT INTO memories (id, project_id, wing_id, room_id, hall_id,
@@ -773,22 +833,34 @@ class MemoryDB:
         rows = []
         ids = []
         now = _now()
+        project_ids_to_bump = set()
         for item in items:
             mid = item.get("id") or _uid()
             ids.append(mid)
-            importance = float(item.get("importance", 0.0))
-            confidence = float(item.get("confidence", 0.0))
-            novelty = float(item.get("novelty", 0.0))
-            reusability = float(item.get("reusability", 0.0))
-            actionability = float(item.get("actionability", 0.0))
+            try:
+                content = self._normalize_memory_content(item.get("content"))
+            except ValueError as exc:
+                raise ValueError(f"Memory at index {len(rows)}: {exc}") from exc
+            project_id = item["project_id"]
+            memory_type = self._normalize_memory_type(item.get("memory_type", "fact"))
+            title = self._normalize_memory_title(item.get("title"), content)
+            importance = self._normalize_float(item.get("importance", 0.0))
+            confidence = self._normalize_float(item.get("confidence", 0.0))
+            novelty = self._normalize_float(item.get("novelty", 0.0))
+            reusability = self._normalize_float(item.get("reusability", 0.0))
+            actionability = self._normalize_float(item.get("actionability", 0.0))
+            if memory_type not in {
+                "project_core", "latest_conversation_summary", "project_summary",
+            }:
+                project_ids_to_bump.add(project_id)
             rows.append((
-                mid, item["project_id"], item.get("wing_id"), item.get("room_id"),
-                item.get("hall_id", "general"), item.get("memory_type", "fact"),
-                item.get("title", "Untitled"), item.get("content", ""),
-                item.get("confidence_label", Confidence.INFERRED),
-                float(item.get("confidence_score", confidence or 0.5)),
-                _json_dumps(item.get("tags") or []),
-                _json_dumps(item.get("source_files") or []),
+                mid, project_id, item.get("wing_id"), item.get("room_id"),
+                self._normalize_hall_id(item.get("hall_id", "general")),
+                memory_type, title, content,
+                self._clean_text(item.get("confidence_label"), Confidence.INFERRED),
+                self._normalize_float(item.get("confidence_score"), confidence or 0.5),
+                _json_dumps(self._normalize_string_list(item.get("tags"))),
+                _json_dumps(self._normalize_string_list(item.get("source_files"))),
                 importance, confidence, novelty, reusability, actionability,
                 self._calc_score(
                     importance, confidence, novelty, reusability, actionability,
@@ -805,13 +877,7 @@ class MemoryDB:
                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 rows,
             )
-            project_ids = {
-                item["project_id"] for item in items
-                if item.get("memory_type", "fact") not in {
-                    "project_core", "latest_conversation_summary", "project_summary",
-                }
-            }
-            for project_id in project_ids:
+            for project_id in project_ids_to_bump:
                 self._bump_project_revision(connection, project_id)
             connection.commit()
         except Exception:

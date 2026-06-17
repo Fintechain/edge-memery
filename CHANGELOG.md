@@ -12,6 +12,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - Hardened data writes so old SQLite databases are migrated before insert.
 - Made `write_memory` and `write_memories_batch` tolerate plain strings, bad JSON fields, and unknown `hall_id` values.
+- Normalized blank `memory_type`, `title`, tags, source files, and numeric scores before SQLite writes.
+- Returned clean empty-content errors instead of leaking SQLite `NOT NULL` failures.
 - Prevented vector index failures from blocking durable SQLite writes.
 
 ## [1.11] - 2026-06-17
