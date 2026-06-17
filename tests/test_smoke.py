@@ -40,5 +40,16 @@ def main():
     print("\n=== ALL TESTS PASSED ===")
 
 
+def test_lancedb_store_reopens_existing_table(tmp_path):
+    vector_dir = tmp_path / "vectors"
+    first = LanceDBStore(str(vector_dir))
+    first.insert("memory-1", "project-1", "The server should restart cleanly.")
+
+    second = LanceDBStore(str(vector_dir))
+
+    assert second.count() == 1
+    assert second.search("restart", project_id="project-1", limit=1)[0].id == "memory-1"
+
+
 if __name__ == "__main__":
     main()

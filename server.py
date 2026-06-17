@@ -37,6 +37,7 @@ Tools (29+):
 from __future__ import annotations
 
 import json
+import logging
 from pathlib import Path
 
 from mcp.server.fastmcp import FastMCP
@@ -44,6 +45,10 @@ from mcp.server.fastmcp import FastMCP
 from .config import get_config, Confidence
 from .db import MemoryDB, _uid, _now
 from .curator import MemoryCurator, PROTECTED_TYPES, TOP_LEVEL_MEMORY_TYPES
+from .stdio import run_fastmcp_stdio
+
+logging.getLogger("numexpr").setLevel(logging.WARNING)
+logging.getLogger("numexpr.utils").setLevel(logging.WARNING)
 
 # Lazy imports for heavy deps
 _backends = None
@@ -795,4 +800,4 @@ def list_task_snapshots(project_name: str, limit: int = 50) -> dict:
 # ── Main entry point ───────────────────────────────────────────────────
 
 def main():
-    mcp.run()
+    run_fastmcp_stdio(mcp)

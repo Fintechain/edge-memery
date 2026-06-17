@@ -107,7 +107,7 @@ Graphify and MemPalace are optional integrations. Without them, the core MCP ser
 
 Python 3.10 or newer is recommended.
 
-Clone the repository and run the following commands from its root directory:
+Clone the repository and run the following commands from the project directory:
 
 ```bash
 python -m venv .venv
@@ -125,7 +125,7 @@ Activate the environment:
 source .venv/bin/activate
 ```
 
-Install Memery:
+Install Memery into the active Python environment:
 
 ```bash
 python -m pip install --upgrade pip
@@ -153,13 +153,19 @@ pip install -e ".[all]"
 
 The equivalent dependency list is available in `requirements-optional.txt`. Graphify's distribution name is `graphifyy`; its Python import package remains `graphify`.
 
-Run the MCP server with the installed console command:
+Check the installation:
 
 ```bash
-memery
+memery doctor
 ```
 
-The module entry point is equivalent:
+For direct source-tree runs before installation:
+
+```bash
+python run_server.py
+```
+
+The module entry point is equivalent after installation:
 
 ```bash
 python -m memory_server
@@ -173,14 +179,35 @@ A typical local MCP configuration looks like this:
 {
   "mcpServers": {
     "memery": {
-      "command": "python",
+      "command": "/absolute/path/to/python",
       "args": ["-m", "memory_server"]
     }
   }
 }
 ```
 
-Install Memery in the Python environment used by the MCP client. The exact configuration location and interpreter selection depend on the client.
+Use the Python executable from the environment where Memery was installed:
+
+```text
+Windows:   C:\path\to\project\.venv\Scripts\python.exe
+macOS/Linux: /path/to/project/.venv/bin/python
+```
+
+Install Memery into the same Python environment used by the MCP client. If your client can launch console scripts directly, `memery` also works after installation.
+
+`memery` and `python -m memory_server` run an MCP stdio server. They are meant to be launched by an MCP client. For a human-readable health check, use `memery doctor`.
+
+### Troubleshooting Installation
+
+If `python -m memory_server` reports `No module named memory_server`, install Memery first with `python -m pip install -e .`, or use `python run_server.py` for a direct source-tree run.
+
+If running `memery` in a terminal appears to wait for input, that is normal for an MCP stdio server. Press `Ctrl+C` to stop it, or run `memery doctor` for diagnostics.
+
+If pip prints `WARNING: Ignoring invalid distribution -illow`, the active Python environment has a broken third-party package metadata directory, commonly from an interrupted Pillow install. Memery may still install successfully, but a fresh virtual environment is the cleanest fix.
+
+If startup reports `Dataset already exists` for `memories.lance`, upgrade to the latest Memery source and reinstall. The LanceDB backend opens existing vector tables idempotently on restart.
+
+If Windows reports `WinError 32` while reinstalling `memery-mcp`, close any running `memery` or `python -m memory_server` process first. The installer cannot replace an executable that is still in use.
 
 ## Basic Usage
 
@@ -309,7 +336,7 @@ The following measurements were produced locally on Windows with Python 3.10 in 
 Parameters:
 
 ```powershell
-python -m memory_server.benchmark_stress `
+python benchmarks\benchmark_stress.py `
   --memories 30000 `
   --batch-size 1000 `
   --operations 30000 `
@@ -358,13 +385,13 @@ Remove-Item Env:PYTEST_DISABLE_PLUGIN_AUTOLOAD
 Current result:
 
 ```text
-7 passed
+10 passed
 ```
 
 Run a smaller core-only benchmark:
 
 ```powershell
-python -m memory_server.benchmark_stress `
+python benchmarks\benchmark_stress.py `
   --memories 20000 `
   --operations 20000 `
   --workers 32
@@ -410,9 +437,10 @@ Older source-tree installations may contain `memory.db`, `lancedb_data`, or `mem
 
 ```text
 backends/                  Vector backend implementations
+benchmarks/                Local stress benchmark scripts
 palace/                    MemPalace routing and temporal graph adapter
 pipeline/                  Graphify code-analysis pipeline
-benchmark_stress.py        Repeatable SQLite and vector stress benchmark
+tests/                     Regression and smoke tests
 config.py                  Configuration and runtime paths
 curator.py                 Ingestion, scoring, summaries, compaction, and pruning
 db.py                      SQLite schema and persistence layer

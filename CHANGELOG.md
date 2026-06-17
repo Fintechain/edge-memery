@@ -6,13 +6,29 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [1.11] - 2026-06-17
+
+### Added
+
+- Added `memery doctor` for user-friendly installation diagnostics.
+- Added robust MCP stdio handling that ignores blank terminal input.
+
+### Fixed
+
+- Fixed LanceDB startup when an existing `memories.lance` table is present.
+- Fixed direct source-tree startup so it does not depend on the clone directory name.
+
+### Removed
+
+- Removed obsolete duplicate vector backend files and local runtime artifacts from the clean release.
+
 ### Added
 
 - Standard Python packaging with an installable `memery` command.
 - Apache License 2.0, security policy, contribution guide, disclaimer, and GitHub templates.
 - User-profile runtime storage under `~/.memery` by default.
 
-## [2.0.0] - 2026-06-16
+## [1.10] - 2026-06-16
 
 ### Added
 

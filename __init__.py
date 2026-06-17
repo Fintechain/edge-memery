@@ -15,4 +15,4 @@ Modules:
   - server: 29+ MCP tools exposed to AI assistants
 """
 
-__version__ = "2.0.0"
+__version__ = "1.11"

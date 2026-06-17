@@ -26,6 +26,10 @@ VEC_CACHE_PATH = DB_DIR / "vectorizer.pkl"
 _vec_cache: dict = {}
 
 
+def _is_dataset_exists_error(exc: Exception) -> bool:
+    return "already exists" in str(exc).lower()
+
+
 def _get_vectorizer():
     if "vectorizer" in _vec_cache:
         return _vec_cache["vectorizer"]
@@ -105,15 +109,27 @@ class LanceDBStore(BaseVectorStore):
         self.db_path_obj = Path(self.db_path)
         self.db_path_obj.mkdir(parents=True, exist_ok=True)
         self.db = lancedb.connect(self.db_path)
+        self._ensure_table()
 
-        if "memories" not in self.db.table_names():
-            dummy_vec = embed_texts(["initialize"])[0].tolist()
+    def _ensure_table(self) -> None:
+        try:
+            self._get_table()
+            return
+        except Exception:
+            pass
+
+        dummy_vec = embed_texts(["initialize"])[0].tolist()
+        try:
             self.db.create_table(
                 "memories",
                 [{"id": "init", "project_id": "init", "vector": dummy_vec, "text": "init"}],
             )
-            tbl = self.db.open_table("memories")
-            tbl.delete("id = 'init'")
+        except Exception as exc:
+            if not _is_dataset_exists_error(exc):
+                raise
+
+        tbl = self._get_table()
+        tbl.delete("id = 'init'")
 
     def _get_table(self):
         return self.db.open_table("memories")
@@ -182,7 +198,12 @@ class LanceDBStore(BaseVectorStore):
 
     def count(self) -> int:
         with self._lock:
-            return self._get_table().count_rows()
+            tbl = self._get_table()
+            if hasattr(tbl, "count_rows"):
+                return tbl.count_rows()
+            if hasattr(tbl, "to_arrow"):
+                return len(tbl.to_arrow())
+            return len(tbl.to_pandas())
 
 
 # Auto-register
