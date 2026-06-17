@@ -86,7 +86,7 @@ class MemoryDB:
     # ═══════════════════════════════════════════════════════════════════════
 
     def _init_tables(self) -> None:
-        self.conn.executescript("""
+        schema_sql = """
         -- ── Projects ────────────────────────────────────────────────────
         CREATE TABLE IF NOT EXISTS projects (
             id TEXT PRIMARY KEY,
@@ -375,19 +375,215 @@ class MemoryDB:
             ON CONFLICT(project_id) DO UPDATE SET
                 revision = revision + 1, updated_at = CURRENT_TIMESTAMP;
         END;
-        """)
-        project_columns = {
-            row["name"] for row in self.conn.execute("PRAGMA table_info(projects)").fetchall()
-        }
-        if "context_type" not in project_columns:
-            self.conn.execute(
-                "ALTER TABLE projects ADD COLUMN context_type TEXT DEFAULT 'auto'"
-            )
+        """
+        try:
+            self.conn.executescript(schema_sql)
+        except sqlite3.OperationalError as exc:
+            if not self._is_additive_migration_error(exc):
+                raise
+            self.conn.rollback()
+            self._migrate_existing_schema()
+            self.conn.executescript(schema_sql)
+
+        self._migrate_existing_schema()
         self.conn.execute(
             """INSERT OR IGNORE INTO project_revisions(project_id, revision)
                SELECT id, 0 FROM projects"""
         )
+        self._ensure_default_wings()
         self.conn.commit()
+
+    @staticmethod
+    def _is_additive_migration_error(exc: sqlite3.OperationalError) -> bool:
+        message = str(exc).lower()
+        return (
+            "no such column" in message
+            or "has no column named" in message
+            or "no such table" in message
+        )
+
+    def _table_exists(self, table: str) -> bool:
+        row = self.conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name=?",
+            (table,),
+        ).fetchone()
+        return row is not None
+
+    def _table_columns(self, table: str) -> set[str]:
+        if not self._table_exists(table):
+            return set()
+        return {
+            row["name"]
+            for row in self.conn.execute(f"PRAGMA table_info({table})").fetchall()
+        }
+
+    def _ensure_columns(self, table: str, columns: dict[str, str]) -> None:
+        if not self._table_exists(table):
+            return
+        existing = self._table_columns(table)
+        for name, definition in columns.items():
+            if name not in existing:
+                self.conn.execute(
+                    f"ALTER TABLE {table} ADD COLUMN {name} {definition}"
+                )
+
+    def _migrate_existing_schema(self) -> None:
+        """Add columns introduced by newer Memery versions to old databases."""
+        self._ensure_columns("projects", {
+            "slug": "TEXT DEFAULT ''",
+            "description": "TEXT DEFAULT ''",
+            "context_type": "TEXT DEFAULT 'auto'",
+            "created_at": "TEXT",
+            "updated_at": "TEXT",
+        })
+        self._ensure_columns("wings", {
+            "project_id": "TEXT",
+            "name": "TEXT DEFAULT ''",
+            "slug": "TEXT DEFAULT ''",
+            "description": "TEXT DEFAULT ''",
+            "created_at": "TEXT",
+        })
+        self._ensure_columns("rooms", {
+            "wing_id": "TEXT",
+            "name": "TEXT DEFAULT ''",
+            "slug": "TEXT DEFAULT ''",
+            "description": "TEXT DEFAULT ''",
+            "created_at": "TEXT",
+        })
+        self._ensure_columns("halls", {
+            "name": "TEXT DEFAULT ''",
+            "description": "TEXT DEFAULT ''",
+        })
+        self._ensure_columns("memories", {
+            "project_id": "TEXT",
+            "wing_id": "TEXT",
+            "room_id": "TEXT",
+            "hall_id": "TEXT DEFAULT 'general'",
+            "memory_type": "TEXT DEFAULT 'fact'",
+            "title": "TEXT DEFAULT ''",
+            "content": "TEXT DEFAULT ''",
+            "confidence_label": "TEXT DEFAULT 'INFERRED'",
+            "confidence_score": "REAL DEFAULT 0.5",
+            "tags": "TEXT DEFAULT '[]'",
+            "source_files": "TEXT DEFAULT '[]'",
+            "importance": "REAL DEFAULT 0.0",
+            "confidence": "REAL DEFAULT 0.0",
+            "novelty": "REAL DEFAULT 0.0",
+            "reusability": "REAL DEFAULT 0.0",
+            "actionability": "REAL DEFAULT 0.0",
+            "score": "REAL DEFAULT 0.0",
+            "hit_count": "INTEGER DEFAULT 0",
+            "last_hit_at": "TEXT",
+            "status": "TEXT DEFAULT 'active'",
+            "created_at": "TEXT",
+            "updated_at": "TEXT",
+            "deprecated_at": "TEXT",
+        })
+        self._ensure_columns("memory_edges", {
+            "source_id": "TEXT",
+            "target_id": "TEXT",
+            "relation": "TEXT DEFAULT 'related_to'",
+            "confidence_label": "TEXT DEFAULT 'INFERRED'",
+            "confidence_score": "REAL DEFAULT 0.5",
+            "metadata": "TEXT DEFAULT '{}'",
+            "created_at": "TEXT",
+        })
+        self._ensure_columns("temporal_triples", {
+            "subject": "TEXT DEFAULT ''",
+            "predicate": "TEXT DEFAULT ''",
+            "object": "TEXT DEFAULT ''",
+            "valid_from": "TEXT",
+            "valid_to": "TEXT",
+            "confidence_label": "TEXT DEFAULT 'INFERRED'",
+            "confidence_score": "REAL DEFAULT 0.5",
+            "drawer_ref": "TEXT",
+            "metadata": "TEXT DEFAULT '{}'",
+            "created_at": "TEXT",
+            "invalidated_at": "TEXT",
+        })
+        self._ensure_columns("memory_candidates", {
+            "project_id": "TEXT",
+            "wing_id": "TEXT",
+            "room_id": "TEXT",
+            "hall_id": "TEXT DEFAULT 'general'",
+            "source_type": "TEXT DEFAULT 'conversation'",
+            "raw_text": "TEXT DEFAULT ''",
+            "extracted_title": "TEXT",
+            "extracted_content": "TEXT",
+            "candidate_type": "TEXT",
+            "reason": "TEXT",
+            "confidence_label": "TEXT DEFAULT 'INFERRED'",
+            "importance": "REAL DEFAULT 0.0",
+            "confidence": "REAL DEFAULT 0.0",
+            "novelty": "REAL DEFAULT 0.0",
+            "reusability": "REAL DEFAULT 0.0",
+            "actionability": "REAL DEFAULT 0.0",
+            "score": "REAL DEFAULT 0.0",
+            "status": "TEXT DEFAULT 'pending'",
+            "duplicate_of": "TEXT",
+            "created_at": "TEXT",
+            "reviewed_at": "TEXT",
+        })
+        self._ensure_columns("memory_reviews", {
+            "candidate_id": "TEXT",
+            "reviewer": "TEXT DEFAULT 'memory_curator'",
+            "decision": "TEXT DEFAULT ''",
+            "merged_to": "TEXT",
+            "reason": "TEXT",
+            "created_at": "TEXT",
+        })
+        self._ensure_columns("memory_compactions", {
+            "project_id": "TEXT",
+            "wing_id": "TEXT",
+            "scope": "TEXT DEFAULT 'all'",
+            "memories_before": "INTEGER",
+            "memories_after": "INTEGER",
+            "removed_count": "INTEGER",
+            "merged_count": "INTEGER",
+            "deprecated_count": "INTEGER",
+            "summary": "TEXT",
+            "created_at": "TEXT",
+        })
+        self._ensure_columns("task_snapshots", {
+            "project_id": "TEXT",
+            "task_name": "TEXT DEFAULT ''",
+            "status": "TEXT DEFAULT 'pending'",
+            "completed": "TEXT DEFAULT '[]'",
+            "remaining": "TEXT DEFAULT '[]'",
+            "notes": "TEXT DEFAULT ''",
+            "created_at": "TEXT",
+        })
+        self._ensure_columns("decisions", {
+            "project_id": "TEXT",
+            "title": "TEXT DEFAULT ''",
+            "content": "TEXT DEFAULT ''",
+            "rationale": "TEXT DEFAULT ''",
+            "alternatives": "TEXT DEFAULT '[]'",
+            "status": "TEXT DEFAULT 'active'",
+            "created_at": "TEXT",
+        })
+        self.conn.execute(
+            "UPDATE projects SET slug = name WHERE (slug IS NULL OR slug = '')"
+        )
+        self.conn.commit()
+
+    def _ensure_default_wings(self) -> None:
+        if not self._table_exists("projects") or not self._table_exists("wings"):
+            return
+        columns = self._table_columns("wings")
+        if not {"id", "project_id", "name", "slug"}.issubset(columns):
+            return
+        self.conn.execute(
+            """INSERT OR IGNORE INTO wings
+               (id, project_id, name, slug, description, created_at)
+               SELECT lower(hex(randomblob(8))), p.id, p.name,
+                      COALESCE(NULLIF(p.slug, ''), lower(replace(p.name, ' ', '-'))),
+                      COALESCE(p.description, ''), COALESCE(p.created_at, CURRENT_TIMESTAMP)
+               FROM projects p
+               WHERE NOT EXISTS (
+                   SELECT 1 FROM wings w WHERE w.project_id = p.id
+               )"""
+        )
 
     # ═══════════════════════════════════════════════════════════════════════
     # Wings (Palace)

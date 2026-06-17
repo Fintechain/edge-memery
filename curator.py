@@ -428,8 +428,15 @@ class MemoryCurator:
                 reusability=candidate.get("reusability", 0),
                 actionability=candidate.get("actionability", 0),
             )
-            self.vs.insert(memory["id"], project_id, content)
             self.db.update_candidate(candidate_id, status="accepted")
+            vector_warning = None
+            try:
+                self.vs.insert(memory["id"], project_id, content)
+            except Exception as exc:
+                vector_warning = (
+                    "Vector index write failed; memory was saved. "
+                    f"{type(exc).__name__}: {exc}"
+                )
 
             # The secondary MemPalace/Chroma embedding path is optional. It
             # loads ONNX Runtime and can be unstable on some Windows hosts.
@@ -443,8 +450,11 @@ class MemoryCurator:
                     pass
 
             summary = self.refresh_project_summary(project_id=project_id) if refresh_summary else None
-            return {"decision": "accepted", "memory": memory, "review": review,
-                    "project_summary": summary.get("summary") if summary else None}
+            result = {"decision": "accepted", "memory": memory, "review": review,
+                      "project_summary": summary.get("summary") if summary else None}
+            if vector_warning:
+                result["warning"] = vector_warning
+            return result
 
         elif decision == "rejected":
             self.db.update_candidate(candidate_id, status="rejected")
@@ -506,7 +516,13 @@ class MemoryCurator:
         )
         if existing:
             code_memory = self.db.update_memory(existing[0]["id"], content=overview)
-            self.vs.update(existing[0]["id"], project["id"], overview)
+            try:
+                self.vs.update(existing[0]["id"], project["id"], overview)
+            except Exception as exc:
+                result["warning"] = (
+                    "Vector index update failed; memory was saved. "
+                    f"{type(exc).__name__}: {exc}"
+                )
         else:
             code_memory = self.db.write_memory(
                 project_id=project["id"], memory_type="architecture",
@@ -515,7 +531,13 @@ class MemoryCurator:
                 source_files=paths, importance=0.9, confidence=0.95,
                 novelty=0.6, reusability=0.9, actionability=0.7,
             )
-            self.vs.insert(code_memory["id"], project["id"], overview)
+            try:
+                self.vs.insert(code_memory["id"], project["id"], overview)
+            except Exception as exc:
+                result["warning"] = (
+                    "Vector index write failed; memory was saved. "
+                    f"{type(exc).__name__}: {exc}"
+                )
 
         summary = self.refresh_project_summary(project_id=project["id"])
         result["code_overview_memory"] = code_memory
@@ -550,7 +572,10 @@ class MemoryCurator:
     # ── Dedup / Merge / Compact / Prune ──────────────────────────────────
 
     def _find_duplicates(self, content: str, project_id: str) -> list[dict]:
-        results = self.vs.search(content, project_id=project_id, limit=5)
+        try:
+            results = self.vs.search(content, project_id=project_id, limit=5)
+        except Exception:
+            return []
         duplicates = []
         for result in results:
             if result.similarity <= DEDUP_THRESHOLD:
@@ -971,7 +996,10 @@ class MemoryCurator:
                        (candidate.get("extracted_content") or candidate.get("raw_text", "")))
         self.db.update_memory(existing_id, content=new_content)
         project_id = candidate.get("project_id", existing.get("project_id", ""))
-        self.vs.update(existing_id, project_id, new_content)
+        try:
+            self.vs.update(existing_id, project_id, new_content)
+        except Exception:
+            pass
         return self.db.get_memory(existing_id) or {}
 
     def compact_project_memory(self, project_name: str) -> dict:

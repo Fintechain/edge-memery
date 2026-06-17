@@ -79,6 +79,41 @@ def _ensure_project(project_name: str) -> dict | None:
     return project
 
 
+def _parse_string_list(value, field_name: str) -> tuple[list[str], str | None]:
+    """Accept JSON arrays, comma-separated strings, or a single plain value."""
+    if value is None or value == "":
+        return [], None
+    if isinstance(value, list):
+        return [str(item) for item in value if str(item).strip()], None
+    if not isinstance(value, str):
+        return [str(value)], f"{field_name} was coerced to a string list."
+    raw = value.strip()
+    if not raw:
+        return [], None
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        if "," in raw:
+            return [part.strip() for part in raw.split(",") if part.strip()], None
+        return [raw], f"{field_name} was not valid JSON; treated as one value."
+    if isinstance(parsed, list):
+        return [str(item) for item in parsed if str(item).strip()], None
+    if isinstance(parsed, str):
+        return [parsed], f"{field_name} JSON value was a string; treated as one value."
+    return [str(parsed)], f"{field_name} JSON value was not an array; coerced."
+
+
+def _warning(exc: Exception) -> str:
+    return f"{type(exc).__name__}: {exc}"
+
+
+def _safe_refresh_summary(project_id: str) -> tuple[dict | None, str | None]:
+    try:
+        return curator.refresh_project_summary(project_id=project_id), None
+    except Exception as exc:
+        return None, _warning(exc)
+
+
 # ═══════════════════════════════════════════════════════════════════════════
 # Palace Management
 # ═══════════════════════════════════════════════════════════════════════════
@@ -219,24 +254,44 @@ def write_memory(
                 if room:
                     room_id = room["id"]
 
-    tags_list = json.loads(tags) if tags else []
-    files_list = json.loads(source_files) if source_files else []
+    content = str(content).strip()
+    if not content:
+        return {"error": "content cannot be empty."}
+
+    warnings = []
+    tags_list, tags_warning = _parse_string_list(tags, "tags")
+    files_list, files_warning = _parse_string_list(source_files, "source_files")
+    warnings.extend(w for w in (tags_warning, files_warning) if w)
+    if not db.get_hall(hall_id):
+        warnings.append(f"Unknown hall_id '{hall_id}'; using 'general'.")
+        hall_id = "general"
 
     memory = db.write_memory(
         project_id=project_id, memory_type=memory_type,
-        title=title, content=content,
+        title=title or content[:60], content=content,
         wing_id=wing_id, room_id=room_id, hall_id=hall_id,
         confidence_label=Confidence.INFERRED, confidence_score=confidence,
         tags=tags_list, source_files=files_list,
         importance=importance, confidence=confidence,
         novelty=novelty, reusability=reusability, actionability=actionability,
     )
-    vector_store.insert(memory["id"], project_id, content)
+    try:
+        vector_store.insert(memory["id"], project_id, content)
+    except Exception as exc:
+        warnings.append(f"Vector index write failed; SQLite memory was saved. {_warning(exc)}")
     if not refresh_summary:
-        return {"status": "written", "memory": memory, "summary_refresh": "deferred"}
-    summary = curator.refresh_project_summary(project_id=project_id)
-    return {"status": "written", "memory": memory,
-            "project_summary": summary.get("summary")}
+        result = {"status": "written", "memory": memory, "summary_refresh": "deferred"}
+        if warnings:
+            result["warnings"] = warnings
+        return result
+    summary, summary_warning = _safe_refresh_summary(project_id)
+    if summary_warning:
+        warnings.append(f"Project summary refresh failed; memory was saved. {summary_warning}")
+    result = {"status": "written", "memory": memory,
+              "project_summary": summary.get("summary") if summary else None}
+    if warnings:
+        result["warnings"] = warnings
+    return result
 
 
 @mcp.tool()
@@ -245,10 +300,14 @@ def write_memories_batch(project_name: str, memories: str) -> dict:
     project = _ensure_project(project_name)
     if "error" in project:
         return project
-    try:
-        items = json.loads(memories)
-    except json.JSONDecodeError as exc:
-        return {"error": f"Invalid memories JSON: {exc}"}
+    warnings = []
+    if isinstance(memories, list):
+        items = memories
+    else:
+        try:
+            items = json.loads(memories)
+        except (json.JSONDecodeError, TypeError) as exc:
+            return {"error": f"Invalid memories JSON: {exc}"}
     if not isinstance(items, list) or not items:
         return {"error": "memories must be a non-empty JSON array."}
     if len(items) > 5000:
@@ -265,12 +324,28 @@ def write_memories_batch(project_name: str, memories: str) -> dict:
         content = str(item.get("content", "")).strip()
         if not content:
             return {"error": f"Memory at index {index} has empty content."}
+        hall_id = str(item.get("hall_id", "general") or "general")
+        if not db.get_hall(hall_id):
+            warnings.append(
+                f"Memory at index {index} uses unknown hall_id '{hall_id}'; using 'general'."
+            )
+            hall_id = "general"
+        tags_list, tags_warning = _parse_string_list(
+            item.get("tags"), f"memories[{index}].tags"
+        )
+        files_list, files_warning = _parse_string_list(
+            item.get("source_files"), f"memories[{index}].source_files"
+        )
+        warnings.extend(w for w in (tags_warning, files_warning) if w)
         row = {
             **item,
             "project_id": project["id"],
             "memory_type": memory_type,
             "title": str(item.get("title") or curator._extract_title(content)),
             "content": content,
+            "hall_id": hall_id,
+            "tags": tags_list,
+            "source_files": files_list,
         }
         rows.append(row)
 
@@ -283,15 +358,20 @@ def write_memories_batch(project_name: str, memories: str) -> dict:
         })
     try:
         vector_store.insert_batch(vector_items)
-    except Exception:
-        pass
-    summary = curator.refresh_project_summary(project_id=project["id"])
-    return {
+    except Exception as exc:
+        warnings.append(f"Vector index batch write failed; SQLite memories were saved. {_warning(exc)}")
+    summary, summary_warning = _safe_refresh_summary(project["id"])
+    if summary_warning:
+        warnings.append(f"Project summary refresh failed; memories were saved. {summary_warning}")
+    result = {
         "status": "written",
         "count": len(written),
         "memories": written,
-        "project_summary": summary.get("summary"),
+        "project_summary": summary.get("summary") if summary else None,
     }
+    if warnings:
+        result["warnings"] = warnings
+    return result
 
 
 @mcp.tool()
@@ -333,11 +413,11 @@ def search_memory(
         for mem in results:
             db.record_memory_hit(mem["id"])
     else:
-        tags_list = json.loads(tags) if tags else None
+        tags_list, _ = _parse_string_list(tags, "tags")
         results = db.search_memories(
             project_id=project_id, wing_id=wing_id, room_id=room_id,
             hall_id=hall_id, memory_type=memory_type, keyword=keyword,
-            tags=tags_list, confidence_label=confidence_label,
+            tags=tags_list or None, confidence_label=confidence_label,
             min_score=min_score, limit=limit,
         )
         for mem in results:
@@ -753,7 +833,7 @@ def record_decision(project_name: str, title: str, content: str,
     project = _ensure_project(project_name)
     if "error" in project:
         return project
-    alt_list = json.loads(alternatives) if alternatives else []
+    alt_list, _ = _parse_string_list(alternatives, "alternatives")
     decision = db.record_decision(project["id"], title, content, rationale, alt_list)
     summary = curator.refresh_project_summary(project_id=project["id"])
     return {"status": "recorded", "decision": decision,
@@ -778,8 +858,8 @@ def record_task_snapshot(project_name: str, task_name: str,
     project = _ensure_project(project_name)
     if "error" in project:
         return project
-    completed_list = json.loads(completed) if completed else []
-    remaining_list = json.loads(remaining) if remaining else []
+    completed_list, _ = _parse_string_list(completed, "completed")
+    remaining_list, _ = _parse_string_list(remaining, "remaining")
     snapshot = db.record_task_snapshot(
         project["id"], task_name, status, completed_list, remaining_list, notes)
     summary = curator.refresh_project_summary(project_id=project["id"])
